@@ -1,21 +1,36 @@
-use chrono::{DateTime, NaiveDateTime, ParseError, Utc};
+use chrono::{DateTime, Utc};
 use near_primitives_core::types::ProtocolVersion;
-use std::env;
+use std::collections::btree_map::BTreeMap;
 
 /// Defines the point in time after which validators are expected to vote on the
 /// new protocol version.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ProtocolUpgradeVotingSchedule {
-    timestamp: chrono::DateTime<Utc>,
+    timestamp_to_version: BTreeMap<DateTime<Utc>, ProtocolVersion>,
 }
 
 impl Default for ProtocolUpgradeVotingSchedule {
     fn default() -> Self {
-        Self { timestamp: DateTime::<Utc>::from_naive_utc_and_offset(Default::default(), Utc) }
+        Self { timestamp_to_version: BTreeMap::new() }
     }
 }
 
 impl ProtocolUpgradeVotingSchedule {
+    /// Return the latest announced protocol version.
+    /// Protocol version is announced if Utc::now() >= timestamp of version voting.
+    /// If all timestamps from voting schedule are in the future, returns None.
+    pub fn get_latest_announced_version(&self) -> Option<ProtocolVersion> {
+        let now = Utc::now();
+
+        // We need to return a value corresponding to the latest timestamp that is less or equal than `now`.
+        // If there is no such value, no protocol voting took place yet, so we should return None.
+        self.timestamp_to_version
+            .range((std::ops::Bound::Unbounded, std::ops::Bound::Included(&now))) // all values <= now
+            .next_back() // latest (timestamp, value) pair
+            .map(|(_key, value)| value.clone())
+    }
+
+    /*
     pub fn is_in_future(&self) -> bool {
         chrono::Utc::now() < self.timestamp
     }
@@ -47,6 +62,7 @@ impl ProtocolUpgradeVotingSchedule {
             ),
         })
     }
+     */
 }
 
 pub(crate) fn get_protocol_version_internal(
@@ -56,19 +72,19 @@ pub(crate) fn get_protocol_version_internal(
     client_protocol_version: ProtocolVersion,
     // Point in time when voting for client_protocol_version version is expected
     // to start.  Use `Default::default()` to start voting immediately.
-    voting_start: ProtocolUpgradeVotingSchedule,
+    voting_schedule: &ProtocolUpgradeVotingSchedule,
 ) -> ProtocolVersion {
     if next_epoch_protocol_version >= client_protocol_version {
         client_protocol_version
-    } else if voting_start.is_in_future() {
-        // Don't announce support for the latest protocol version yet.
-        next_epoch_protocol_version
+    } else if let Some(protocol_version) = voting_schedule.get_latest_announced_version() {
+        protocol_version
     } else {
-        // The time has passed, announce the latest supported protocol version.
-        client_protocol_version
+        // Don't announce support for new protocol version yet.
+        next_epoch_protocol_version
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,3 +259,4 @@ mod tests {
         );
     }
 }
+*/

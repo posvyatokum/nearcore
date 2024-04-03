@@ -70,6 +70,6 @@ pub fn get_protocol_version(next_epoch_protocol_version: ProtocolVersion) -> Pro
     get_protocol_version_internal(
         next_epoch_protocol_version,
         PROTOCOL_VERSION,
-        *PROTOCOL_UPGRADE_SCHEDULE,
+        &PROTOCOL_UPGRADE_SCHEDULE,
     )
 }

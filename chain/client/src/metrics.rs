@@ -403,8 +403,11 @@ pub(crate) static PRODUCE_AND_DISTRIBUTE_CHUNK_TIME: Lazy<HistogramVec> = Lazy::
 /// `neard_version` argument.
 pub(crate) fn export_version(neard_version: &near_primitives::version::Version) {
     NODE_PROTOCOL_VERSION.set(near_primitives::version::PROTOCOL_VERSION.into());
+    // TODO(posvyatokum): fix this metric
+    /*
     NODE_PROTOCOL_UPGRADE_VOTING_START
         .set(near_primitives::version::PROTOCOL_UPGRADE_SCHEDULE.timestamp());
+     */
     NODE_DB_VERSION.set(near_store::metadata::DB_VERSION.into());
     NODE_BUILD_INFO.reset();
     NODE_BUILD_INFO
