@@ -151,6 +151,7 @@ fn get_temperature_str(temperature: &Temperature) -> &'static str {
     match temperature {
         Temperature::Hot => "",
         Temperature::Cold => "_cold",
+        Temperature::Frozen => "_frozen",
     }
 }
 

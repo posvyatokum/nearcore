@@ -39,6 +39,9 @@ pub enum DbKind {
     /// The database is Cold meaning that the node runs in archival mode with
     /// a paired Hot database.
     Cold,
+    /// The database is Frozen meaning that the it is only used as a fallback database
+    /// to lookup data that was not found in main DBs.
+    Frozen,
 }
 
 /// Metadata about a database.

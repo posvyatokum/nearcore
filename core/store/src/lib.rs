@@ -69,6 +69,7 @@ pub use crate::opener::{
 pub enum Temperature {
     Hot,
     Cold,
+    Frozen,
 }
 
 impl FromStr for Temperature {
@@ -79,6 +80,7 @@ impl FromStr for Temperature {
         match s.as_str() {
             "hot" => Ok(Temperature::Hot),
             "cold" => Ok(Temperature::Cold),
+            "frozen" => Ok(Temperature::Frozen),
             _ => Err(String::from(format!("invalid temperature string {s}"))),
         }
     }
@@ -94,6 +96,7 @@ const STATE_FILE_END_MARK: u8 = 255;
 pub struct NodeStorage {
     hot_storage: Arc<dyn Database>,
     cold_storage: Option<Arc<crate::db::ColdDB>>,
+    frozen_storage: Option<Arc<crate::db::FrozenDB>>,
 }
 
 /// Node’s single storage source.
@@ -133,7 +136,7 @@ impl NodeStorage {
             None
         };
 
-        Self { hot_storage, cold_storage: cold_db }
+        Self { hot_storage, cold_storage: cold_db, frozen_storage: None }
     }
 
     /// Initialises an opener for a new temporary test store.
@@ -161,7 +164,7 @@ impl NodeStorage {
     /// possibly [`crate::test_utils::create_test_store`] (depending whether you
     /// need [`NodeStorage`] or [`Store`] object.
     pub fn new(storage: Arc<dyn Database>) -> Self {
-        Self { hot_storage: storage, cold_storage: None }
+        Self { hot_storage: storage, cold_storage: None, frozen_storage: None }
     }
 }
 
@@ -213,6 +216,12 @@ impl NodeStorage {
         }
     }
 
+    /// Returns multi-split store with hot, ?cold, and ?frozen dbs.
+    pub fn get_multi_split_store(&self) -> Option<Store> {
+        // TODO(posvyatokum): implement
+        None
+    }
+
     /// Returns underlying database for given temperature.
     ///
     /// This allows accessing underlying hot and cold databases directly
@@ -233,6 +242,7 @@ impl NodeStorage {
         match temp {
             Temperature::Hot => self.hot_storage,
             Temperature::Cold => self.cold_storage.unwrap(),
+            Temperature::Frozen => self.frozen_storage.unwrap(),
         }
     }
 }
@@ -251,12 +261,16 @@ impl NodeStorage {
         Ok(match metadata::DbMetadata::read(self.hot_storage.as_ref())?.kind.unwrap() {
             metadata::DbKind::RPC => false,
             metadata::DbKind::Archive => true,
-            metadata::DbKind::Hot | metadata::DbKind::Cold => todo!(),
+            metadata::DbKind::Hot | metadata::DbKind::Cold | metadata::DbKind::Frozen => todo!(),
         })
     }
 
     pub fn new_with_cold(hot: Arc<dyn Database>, cold: Arc<dyn Database>) -> Self {
-        Self { hot_storage: hot, cold_storage: Some(Arc::new(crate::db::ColdDB::new(cold))) }
+        Self {
+            hot_storage: hot,
+            cold_storage: Some(Arc::new(crate::db::ColdDB::new(cold))),
+            frozen_storage: None,
+        }
     }
 
     pub fn cold_db(&self) -> Option<&Arc<crate::db::ColdDB>> {

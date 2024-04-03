@@ -129,6 +129,7 @@ fn get_default_kind(archive: bool, temp: Temperature) -> DbKind {
         (Temperature::Hot, false) => DbKind::RPC,
         (Temperature::Hot, true) => DbKind::Archive,
         (Temperature::Cold, _) => DbKind::Cold,
+        (Temperature::Frozen, _) => DbKind::Frozen,
     }
 }
 
@@ -138,6 +139,7 @@ fn is_valid_kind_temp(kind: DbKind, temp: Temperature) -> bool {
         (DbKind::RPC, Temperature::Hot) => true,
         (DbKind::Hot, Temperature::Hot) => true,
         (DbKind::Archive, Temperature::Hot) => true,
+        (DbKind::Frozen, Temperature::Frozen) => true,
         _ => false,
     }
 }

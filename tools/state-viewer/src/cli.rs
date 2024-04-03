@@ -120,6 +120,7 @@ impl StateViewerSubCommand {
             Temperature::Hot => storage.get_hot_store(),
             // Cold store on it's own is useless in majority of subcommands
             Temperature::Cold => storage.get_split_store().unwrap(),
+            Temperature::Frozen => storage.get_multi_split_store().unwrap(),
         };
 
         match self {

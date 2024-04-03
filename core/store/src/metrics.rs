@@ -572,6 +572,7 @@ pub fn spawn_db_metrics_loop(
             if let Some(cold_store) = &cold_store {
                 export_store_stats(cold_store, Temperature::Cold);
             }
+            // TODO(posvyatokum): export frozen metrics once per run
         }
     });
 
