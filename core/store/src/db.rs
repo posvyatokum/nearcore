@@ -15,6 +15,7 @@ mod testdb;
 mod database_tests;
 
 pub use self::colddb::ColdDB;
+pub use self::db_with_backups::DBWithBackups;
 pub use self::rocksdb::RocksDB;
 pub use self::splitdb::SplitDB;
 

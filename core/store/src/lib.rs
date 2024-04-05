@@ -1,6 +1,8 @@
 extern crate core;
 
-use crate::db::{refcount, DBIterator, DBOp, DBSlice, DBTransaction, Database, StoreStatistics};
+use crate::db::{
+    refcount, DBIterator, DBOp, DBSlice, DBTransaction, DBWithBackups, Database, StoreStatistics,
+};
 pub use crate::trie::iterator::{TrieIterator, TrieTraversalItem};
 pub use crate::trie::update::{TrieUpdate, TrieUpdateIterator, TrieUpdateValuePtr};
 pub use crate::trie::{
@@ -54,6 +56,7 @@ mod sync_utils;
 pub mod test_utils;
 pub mod trie;
 
+use crate::config::ColumnBackupConfig;
 pub use crate::config::{Mode, StoreConfig};
 pub use crate::opener::{
     checkpoint_hot_storage_and_cleanup_columns, StoreMigrator, StoreOpener, StoreOpenerError,
@@ -166,6 +169,18 @@ impl NodeStorage {
 }
 
 impl NodeStorage {
+    /// Make hot storage recognise experimental column backups from config
+    pub fn get_storage_with_hot_backups(
+        &self,
+        home: &Path,
+        backups_config: Vec<ColumnBackupConfig>,
+    ) -> Self {
+        Self {
+            hot_storage: DBWithBackups::new(self.hot_storage.clone(), home, backups_config),
+            cold_storage: self.cold_storage.clone(),
+        }
+    }
+
     /// Returns the hot store. The hot store is always available and it provides
     /// direct access to the hot database.
     ///
