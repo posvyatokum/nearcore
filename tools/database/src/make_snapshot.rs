@@ -3,6 +3,7 @@ use near_store::{
     STATE_SNAPSHOT_COLUMNS,
 };
 use std::path::{Path, PathBuf};
+use strum::IntoEnumIterator;
 
 #[derive(clap::Args)]
 pub(crate) struct MakeSnapshotCommand {
@@ -29,6 +30,46 @@ impl MakeSnapshotCommand {
             &node_storage.get_hot_store(),
             &self.destination,
             columns_to_keep.map(AsRef::as_ref),
+        )?;
+        Ok(())
+    }
+}
+
+fn find_db_col(col: &str) -> near_store::DBCol {
+    for db_col in near_store::DBCol::iter() {
+        if format!("{}", db_col) == col {
+            return db_col;
+        }
+    }
+    panic!("Wrong column")
+}
+
+#[derive(clap::Args)]
+pub(crate) struct CreateColumnBackupCommand {
+    #[clap(short, long)]
+    column: String,
+    /// Backup destination directory.
+    #[clap(long)]
+    destination: PathBuf,
+}
+
+impl CreateColumnBackupCommand {
+    pub(crate) fn run(&self, home: &Path) -> anyhow::Result<()> {
+        let near_config = nearcore::config::load_config(
+            &home,
+            near_chain_configs::GenesisValidationMode::UnsafeFast,
+        )
+        .unwrap_or_else(|e| panic!("Error loading config: {:#}", e));
+        let opener = NodeStorage::opener(home, false, &near_config.config.store, None);
+        let node_storage = opener.open_in_mode(Mode::ReadWriteExisting)?;
+        checkpoint_hot_storage_and_cleanup_columns(
+            &node_storage.get_hot_store(),
+            &self.destination,
+            Some(&[
+                find_db_col(&self.column),
+                near_store::DBCol::DbVersion,
+                near_store::DBCol::BlockMisc,
+            ]),
         )?;
         Ok(())
     }

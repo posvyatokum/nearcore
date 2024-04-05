@@ -5,7 +5,7 @@ use crate::analyse_high_load::HighLoadStatsCommand;
 use crate::analyze_delayed_receipt::AnalyzeDelayedReceiptCommand;
 use crate::compact::RunCompactionCommand;
 use crate::corrupt::CorruptStateSnapshotCommand;
-use crate::make_snapshot::MakeSnapshotCommand;
+use crate::make_snapshot::{CreateColumnBackupCommand, MakeSnapshotCommand};
 use crate::memtrie::LoadMemTrieCommand;
 use crate::run_migrations::RunMigrationsCommand;
 use crate::state_perf::StatePerfCommand;
@@ -53,6 +53,9 @@ enum SubCommand {
     HighLoadStats(HighLoadStatsCommand),
     // Analyze congestion through delayed receipts
     AnalyzeDelayedReceipt(AnalyzeDelayedReceiptCommand),
+
+    /// Generate column backup db
+    CreateColumnBackup(CreateColumnBackupCommand),
 }
 
 impl DatabaseCommand {
@@ -83,6 +86,7 @@ impl DatabaseCommand {
             }
             SubCommand::HighLoadStats(cmd) => cmd.run(home),
             SubCommand::AnalyzeDelayedReceipt(cmd) => cmd.run(home),
+            SubCommand::CreateColumnBackup(cmd) => cmd.run(home),
         }
     }
 }
