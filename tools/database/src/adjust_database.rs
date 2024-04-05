@@ -5,6 +5,7 @@ use near_store::metadata::DbKind;
 use near_store::{DBCol, NodeStorage, Store};
 use std::collections::HashSet;
 use std::path::Path;
+use std::path::PathBuf;
 
 /// This can potentially support db specified not in config, but in command line.
 /// `ChangeRelative { path: Path, archive: bool }`
@@ -52,7 +53,10 @@ impl ChangeDbKindCommand {
 }
 
 #[derive(clap::Args)]
-pub(crate) struct GCHeadersCommand {}
+pub(crate) struct GCHeadersCommand {
+    #[clap(long)]
+    backup_home: PathBuf,
+}
 
 impl GCHeadersCommand {
     pub(crate) fn run(&self, home_dir: &Path) -> anyhow::Result<()> {
@@ -68,35 +72,57 @@ impl GCHeadersCommand {
         );
         let hot_store = opener.open()?.get_hot_store();
 
+        let near_config = nearcore::config::load_config(
+            &self.backup_home,
+            near_chain_configs::GenesisValidationMode::UnsafeFast,
+        )?;
+        let opener = NodeStorage::opener(
+            &self.backup_home,
+            near_config.config.archive,
+            &near_config.config.store,
+            near_config.config.cold_store.as_ref(),
+        );
+        let backup_store = opener.open()?.get_hot_store();
+
         let live_hashes = Self::load_all_live_blocks(&hot_store)?;
-        let live_headers_set_transaction = Self::load_all_live_headers(&hot_store, &live_hashes)?;
 
         let mut delete_transaction = DBTransaction::new();
         delete_transaction.delete_all(DBCol::BlockHeader);
         hot_store.storage.write(delete_transaction)?;
 
-        hot_store.storage.write(live_headers_set_transaction)?;
-
+        Self::write_all_live_headers(&hot_store, &backup_store, &live_hashes)?;
         Ok(())
     }
 
-    fn load_all_live_headers(
-        store: &Store,
+    fn write_all_live_headers(
+        hot_store: &Store,
+        backup_store: &Store,
         live_hashes: &HashSet<CryptoHash>,
-    ) -> anyhow::Result<DBTransaction> {
+    ) -> anyhow::Result<()> {
         let mut transaction = DBTransaction::new();
 
         tracing::info!(target: "nearcore", "Start iterating BlockHeader");
-        for result in store.iter(DBCol::BlockHeader) {
+        let mut counter = 0;
+        for result in backup_store.iter(DBCol::BlockHeader) {
             let (key, value) = result?;
             let hash = CryptoHash::try_from_slice(&key)?;
             if live_hashes.contains(&hash) {
                 transaction.set(DBCol::BlockHeader, key.to_vec(), value.to_vec());
+                counter += 1
+            }
+
+            if counter >= 5000 {
+                hot_store.storage.write(transaction)?;
+                transaction = DBTransaction::new();
+                tracing::info!(target: "nearcore", ?counter, "Wrote transaction");
+                counter = 0;
             }
         }
+        tracing::info!(target: "nearcore", ?counter, "Wrote transaction");
+        hot_store.storage.write(transaction)?;
         tracing::info!(target: "nearcore", "Finished iterating BlockHeader");
 
-        Ok(transaction)
+        Ok(())
     }
 
     fn load_all_live_blocks(store: &Store) -> anyhow::Result<HashSet<CryptoHash>> {
