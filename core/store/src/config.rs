@@ -95,6 +95,28 @@ pub struct StoreConfig {
 
     // TODO (#9989): To be phased out in favor of state_snapshot_config
     pub state_snapshot_enabled: bool,
+
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub experimental_column_backups: Vec<ColumnBackupConfig>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ColumnBackupConfig {
+    pub column: DBCol,
+    pub path: std::path::PathBuf,
+    pub max_open_files: u32,
+    pub block_size: bytesize::ByteSize,
+}
+
+impl Default for ColumnBackupConfig {
+    fn default() -> Self {
+        Self {
+            column: DBCol::BlockMisc,
+            path: "data".parse().unwrap(),
+            max_open_files: 10_000,
+            block_size: bytesize::ByteSize::kib(16),
+        }
+    }
 }
 
 /// Config used to control state snapshot creation. This is used for state sync and resharding.
@@ -266,6 +288,7 @@ impl Default for StoreConfig {
 
             // TODO: To be phased out in favor of state_snapshot_config
             state_snapshot_enabled: false,
+            experimental_column_backups: vec![],
         }
     }
 }

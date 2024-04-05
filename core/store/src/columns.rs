@@ -16,7 +16,17 @@ use std::fmt;
 /// deprecation.  Make sure to add `#[strum(serialize = "OriginalName")]`
 /// attribute in front of the variant when you deprecate a column.
 #[derive(
-    PartialEq, Copy, Clone, Debug, Hash, Eq, enum_map::Enum, strum::EnumIter, strum::IntoStaticStr,
+    PartialEq,
+    Copy,
+    Clone,
+    Debug,
+    Hash,
+    Eq,
+    enum_map::Enum,
+    strum::EnumIter,
+    strum::IntoStaticStr,
+    serde::Serialize,
+    serde::Deserialize,
 )]
 pub enum DBCol {
     /// Column to indicate which version of database this is.
