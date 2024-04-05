@@ -1,4 +1,4 @@
-use crate::adjust_database::ChangeDbKindCommand;
+use crate::adjust_database::{ChangeDbKindCommand, GCHeadersCommand};
 use crate::analyse_data_size_distribution::AnalyseDataSizeDistributionCommand;
 use crate::analyse_gas_usage::AnalyseGasUsageCommand;
 use crate::analyse_high_load::HighLoadStatsCommand;
@@ -56,6 +56,8 @@ enum SubCommand {
 
     /// Generate column backup db
     CreateColumnBackup(CreateColumnBackupCommand),
+    /// Garbage collect headers up to tail
+    GCHeaders(GCHeadersCommand),
 }
 
 impl DatabaseCommand {
@@ -87,6 +89,7 @@ impl DatabaseCommand {
             SubCommand::HighLoadStats(cmd) => cmd.run(home),
             SubCommand::AnalyzeDelayedReceipt(cmd) => cmd.run(home),
             SubCommand::CreateColumnBackup(cmd) => cmd.run(home),
+            SubCommand::GCHeaders(cmd) => cmd.run(home),
         }
     }
 }

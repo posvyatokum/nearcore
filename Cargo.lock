@@ -3719,6 +3719,7 @@ dependencies = [
  "rocksdb",
  "strum",
  "tempfile",
+ "tracing",
 ]
 
 [[package]]

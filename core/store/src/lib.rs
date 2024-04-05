@@ -107,7 +107,7 @@ pub struct NodeStorage {
 /// - The split database - access to both hot and cold databases
 #[derive(Clone)]
 pub struct Store {
-    storage: Arc<dyn Database>,
+    pub storage: Arc<dyn Database>,
 }
 
 impl NodeStorage {
