@@ -537,6 +537,14 @@ pub static COLD_STORE_MIGRATION_BATCH_WRITE_TIME: Lazy<HistogramVec> = Lazy::new
     )
     .unwrap()
 });
+pub static BACKUP_STORE_READ_COUNT: Lazy<IntCounterVec> = Lazy::new(|| {
+    try_create_int_counter_vec(
+        "near_backup_store_read_count",
+        "Number of read calls to column backups for DBWithBackups",
+        &["col"],
+    )
+    .unwrap()
+});
 
 fn export_store_stats(store: &Store, temperature: Temperature) {
     if let Some(stats) = store.get_store_statistics() {

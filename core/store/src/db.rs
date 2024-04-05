@@ -5,6 +5,7 @@ use std::io;
 pub(crate) mod rocksdb;
 
 mod colddb;
+mod db_with_backups;
 mod splitdb;
 
 pub mod refcount;
