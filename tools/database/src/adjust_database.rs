@@ -1,5 +1,3 @@
-use borsh::BorshDeserialize;
-use near_primitives::hash::CryptoHash;
 use near_store::db::DBTransaction;
 use near_store::metadata::DbKind;
 use near_store::{DBCol, NodeStorage, Store};
@@ -85,6 +83,7 @@ impl GCHeadersCommand {
         let backup_store = opener.open()?.get_hot_store();
 
         let live_hashes = Self::load_all_live_blocks(&hot_store)?;
+        tracing::info!(target: "nearcore", "Collected live hashes, expect size around 216000, actual size {}", live_hashes.len());
 
         let mut delete_transaction = DBTransaction::new();
         delete_transaction.delete_all(DBCol::BlockHeader);
@@ -97,7 +96,7 @@ impl GCHeadersCommand {
     fn write_all_live_headers(
         hot_store: &Store,
         backup_store: &Store,
-        live_hashes: &HashSet<CryptoHash>,
+        live_hashes: &HashSet<Vec<u8>>,
     ) -> anyhow::Result<()> {
         let mut transaction = DBTransaction::new();
 
@@ -105,15 +104,15 @@ impl GCHeadersCommand {
         let mut counter = 0;
         for result in backup_store.iter(DBCol::BlockHeader) {
             let (key, value) = result?;
-            let hash = CryptoHash::try_from_slice(&key)?;
-            if live_hashes.contains(&hash) {
-                transaction.set(DBCol::BlockHeader, key.to_vec(), value.to_vec());
+            let key_vec = key.to_vec();
+            if live_hashes.contains(&key_vec) {
+                transaction.set(DBCol::BlockHeader, key_vec, value.to_vec());
                 counter += 1
             }
 
             if counter >= 5000 {
-                hot_store.storage.write(transaction)?;
-                transaction = DBTransaction::new();
+                let moved_transaction = std::mem::take(&mut transaction);
+                hot_store.storage.write(moved_transaction)?;
                 tracing::info!(target: "nearcore", ?counter, "Wrote transaction");
                 counter = 0;
             }
@@ -125,13 +124,13 @@ impl GCHeadersCommand {
         Ok(())
     }
 
-    fn load_all_live_blocks(store: &Store) -> anyhow::Result<HashSet<CryptoHash>> {
+    fn load_all_live_blocks(store: &Store) -> anyhow::Result<HashSet<Vec<u8>>> {
         let mut live_hashes = HashSet::new();
 
         tracing::info!(target: "nearcore", "Start iterating BlockInfo");
         for result in store.iter(DBCol::BlockInfo) {
             let (key, _) = result?;
-            live_hashes.insert(CryptoHash::try_from_slice(&key)?);
+            live_hashes.insert(key.to_vec());
         }
         tracing::info!(target: "nearcore", "Finished iterating BlockInfo");
 
