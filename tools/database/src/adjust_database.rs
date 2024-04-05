@@ -127,12 +127,12 @@ impl GCHeadersCommand {
     fn load_all_live_blocks(store: &Store) -> anyhow::Result<HashSet<Vec<u8>>> {
         let mut live_hashes = HashSet::new();
 
-        tracing::info!(target: "nearcore", "Start iterating BlockInfo");
-        for result in store.iter(DBCol::BlockInfo) {
+        tracing::info!(target: "nearcore", "Start iterating Block");
+        for result in store.iter(DBCol::Block) {
             let (key, _) = result?;
             live_hashes.insert(key.to_vec());
         }
-        tracing::info!(target: "nearcore", "Finished iterating BlockInfo");
+        tracing::info!(target: "nearcore", "Finished iterating Block");
 
         Ok(live_hashes)
     }
