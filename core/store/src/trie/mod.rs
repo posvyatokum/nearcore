@@ -1215,11 +1215,13 @@ impl Trie {
         charge_gas_for_trie_node_access: bool,
     ) -> Result<Option<ValueRef>, StorageError> {
         let mut hash = self.root;
+        tracing::info!(?key, "lookup from state column init");
         loop {
             let node = match self.retrieve_raw_node(&hash, charge_gas_for_trie_node_access)? {
                 None => return Ok(None),
                 Some((_bytes, node)) => node.node,
             };
+            tracing::info!(?hash, ?node, "lookup_from_state_column");
             match node {
                 RawTrieNode::Leaf(existing_key, value) => {
                     return Ok(if NibbleSlice::from_encoded(&existing_key).0 == key {
@@ -1447,8 +1449,10 @@ impl Trie {
                 v.to_optimized_value_ref()
             })
         } else if mode == KeyLookupMode::FlatStorage && self.flat_storage_chunk_view.is_some() {
+            tracing::info!("Looking up from FlatStorage");
             self.lookup_from_flat_storage(key)
         } else {
+            tracing::info!("Looking up from State column");
             Ok(self
                 .lookup_from_state_column(NibbleSlice::new(key), charge_gas_for_trie_node_access)?
                 .map(OptimizedValueRef::Ref))

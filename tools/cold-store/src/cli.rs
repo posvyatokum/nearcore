@@ -1,5 +1,5 @@
-use near_primitives::types::ShardId;
-use crate::cli::SubCommand::CheckStateRoot;
+use nearcore::NightshadeRuntimeExt;
+use near_primitives::types::{AccountId, ShardId};
 use anyhow::{anyhow, Context};
 use borsh::BorshDeserialize;
 use clap;
@@ -7,18 +7,20 @@ use near_epoch_manager::{EpochManager, EpochManagerAdapter, EpochManagerHandle};
 use near_primitives::block::{Block, Tip};
 use near_primitives::epoch_manager::block_info::BlockInfo;
 use near_primitives::hash::CryptoHash;
-use near_primitives::shard_layout::{ShardLayout, ShardUId};
+use near_primitives::shard_layout::{account_id_to_shard_id, get_block_shard_uid, ShardLayout, ShardUId};
 use near_primitives::types::BlockHeight;
 use near_store::cold_storage::{copy_all_data_to_cold, update_cold_db, update_cold_head};
 use near_store::metadata::DbKind;
 use near_store::{DBCol, NodeStorage, Store, StoreOpener};
 use near_store::{COLD_HEAD_KEY, FINAL_HEAD_KEY, HEAD_KEY, TAIL_KEY};
-use nearcore::NearConfig;
+use nearcore::{NearConfig, NightshadeRuntime};
 use rand::seq::SliceRandom;
 use std::fs::File;
 use std::io::{Result, Write};
 use std::path::{Path, PathBuf};
 use strum::IntoEnumIterator;
+use near_primitives::types::chunk_extra::ChunkExtra;
+use node_runtime::adapter::ViewRuntimeAdapter;
 
 #[derive(clap::Parser)]
 pub struct ColdStoreCommand {
@@ -63,6 +65,8 @@ enum SubCommand {
     /// Non-failing in case of missing values.
     /// Generates reports for insight.
     CheckStateHistory(CheckStateHistoryCmd),
+    /// View account
+    CheckAccount(CheckAccountCmd),
 }
 
 impl ColdStoreCommand {
@@ -99,6 +103,7 @@ impl ColdStoreCommand {
             SubCommand::CheckStateRoot(cmd) => cmd.run(&storage),
             SubCommand::ResetCold(cmd) => cmd.run(&storage),
             SubCommand::CheckStateHistory(cmd) => cmd.run(&storage),
+            SubCommand::CheckAccount(cmd) => cmd.run(&storage, &home_dir, &near_config),
         }
     }
 
@@ -115,6 +120,7 @@ impl ColdStoreCommand {
             tracing::warn!("Expected archive option in config to be set to true.");
         }
 
+        /*
         let opener = NodeStorage::opener(
             home_dir,
             near_config.config.archive,
@@ -137,6 +143,7 @@ impl ColdStoreCommand {
             }
             _ => {}
         }
+         */
 
         NodeStorage::opener(
             home_dir,
@@ -789,5 +796,67 @@ impl CheckStateHistoryCmd {
         }
 
         Ok(Some(format!("{height:?}: {chunk_results:?}\n")))
+    }
+}
+
+
+#[derive(clap::Args)]
+struct CheckAccountCmd {
+    /// Account to find
+    #[clap(long)]
+    account_id: AccountId,
+    /// Path to write report file
+    #[clap(long)]
+    height: BlockHeight,
+}
+
+impl CheckAccountCmd {
+    pub fn run(self, storage: &NodeStorage, home_dir: &Path, near_config: &NearConfig) -> anyhow::Result<()> {
+        let split_store = storage.get_split_store().ok_or(anyhow!("Split Store is not configured"))?;
+
+        let epoch_manager = EpochManager::new_arc_handle(split_store.clone(), &near_config.genesis.config);
+        let runtime =
+            NightshadeRuntime::from_config(home_dir, split_store.clone(), &near_config, epoch_manager.clone())
+                .context("could not create the transaction runtime")?;
+
+        let block = self.get_block(&split_store)?;
+        let shard_uid = self.get_shard_uid(&block)?;
+        let state_root = self.get_state_root(&split_store, &block, &shard_uid)?;
+
+        println!("{:?}", runtime.view_account(&shard_uid, state_root, &self.account_id));
+        Ok(())
+    }
+
+    fn get_block(&self, split_store: &Store) -> anyhow::Result<Block> {
+        let height_key = self.height.to_le_bytes();
+
+        let block_hash_vec = split_store.get(DBCol::BlockHeight, &height_key)?;
+        let block_hash_vec = block_hash_vec.with_context(|| "No such height")?;
+        let block_hash_key = block_hash_vec.as_slice();
+        split_store.get_ser::<Block>(DBCol::Block, &block_hash_key)?.ok_or_else(|| {
+                anyhow::anyhow!("Block header not found with {block_hash_vec:?}")
+            }).into()
+    }
+
+    fn get_shard_uid(&self, block: &Block) -> anyhow::Result<ShardUId> {
+        let shard_layout = match block.header().chunk_mask().len() {
+            1 => ShardLayout::v0_single_shard(),
+            4 => ShardLayout::get_simple_nightshade_layout(),
+            5 => ShardLayout::get_simple_nightshade_layout_v2(),
+            6 => ShardLayout::get_simple_nightshade_layout_v3(),
+            _ => todo!(),
+        };
+
+        let shard_id = account_id_to_shard_id(&self.account_id, &shard_layout);
+        Ok(ShardUId::from_shard_id_and_layout(shard_id, &shard_layout))
+    }
+
+    fn get_state_root(&self, split_store: &Store, block: &Block, shard_uid: &ShardUId) -> anyhow::Result<CryptoHash> {
+        let chunk_extra = split_store.get_ser::<ChunkExtra>(
+            DBCol::ChunkExtra,
+            &get_block_shard_uid(block.hash(), &shard_uid),
+        )?.ok_or(anyhow!("ChunkExtra not found"))?;
+
+        Ok(chunk_extra.state_root().clone())
     }
 }
