@@ -1,20 +1,23 @@
+use near_primitives::types::ShardId;
 use crate::cli::SubCommand::CheckStateRoot;
-use anyhow;
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use borsh::BorshDeserialize;
 use clap;
 use near_epoch_manager::{EpochManager, EpochManagerAdapter, EpochManagerHandle};
-use near_primitives::block::Tip;
+use near_primitives::block::{Block, Tip};
 use near_primitives::epoch_manager::block_info::BlockInfo;
 use near_primitives::hash::CryptoHash;
+use near_primitives::shard_layout::{ShardLayout, ShardUId};
+use near_primitives::types::BlockHeight;
 use near_store::cold_storage::{copy_all_data_to_cold, update_cold_db, update_cold_head};
 use near_store::metadata::DbKind;
 use near_store::{DBCol, NodeStorage, Store, StoreOpener};
 use near_store::{COLD_HEAD_KEY, FINAL_HEAD_KEY, HEAD_KEY, TAIL_KEY};
 use nearcore::NearConfig;
 use rand::seq::SliceRandom;
-use std::io::Result;
-use std::path::Path;
+use std::fs::File;
+use std::io::{Result, Write};
+use std::path::{Path, PathBuf};
 use strum::IntoEnumIterator;
 
 #[derive(clap::Parser)]
@@ -56,6 +59,10 @@ enum SubCommand {
     /// Modifies cold db from config to be considered not initialised.
     /// Doesn't actually delete any data, except for HEAD and COLD_HEAD in BlockMisc.
     ResetCold(ResetColdCmd),
+    /// Check presence of chunk roots and their kinds in the storage.
+    /// Non-failing in case of missing values.
+    /// Generates reports for insight.
+    CheckStateHistory(CheckStateHistoryCmd),
 }
 
 impl ColdStoreCommand {
@@ -91,6 +98,7 @@ impl ColdStoreCommand {
             SubCommand::PrepareHot(cmd) => cmd.run(&storage, &home_dir, &near_config),
             SubCommand::CheckStateRoot(cmd) => cmd.run(&storage),
             SubCommand::ResetCold(cmd) => cmd.run(&storage),
+            SubCommand::CheckStateHistory(cmd) => cmd.run(&storage),
         }
     }
 
@@ -520,7 +528,7 @@ impl StateRootSelector {
 /// Struct that holds all conditions for node in Trie
 /// to be checked by CheckStateRootCmd::check_trie.
 #[derive(Debug)]
-struct PruneCondition {
+struct  PruneCondition {
     /// Maximum depth (measured in number of nodes, not trie key length).
     max_depth: Option<u64>,
     /// Maximum number of nodes checked for each state_root.
@@ -578,6 +586,10 @@ struct CheckStateRootCmd {
     /// Maximum number of nodes checked for each state_root.
     #[clap(long)]
     max_count: Option<u64>,
+    #[clap(long)]
+    layout_version: u64,
+    #[clap(long)]
+    shard_id: ShardId,
     #[clap(subcommand)]
     state_root_selector: StateRootSelector,
 }
@@ -588,73 +600,87 @@ impl CheckStateRootCmd {
             .get_cold_store()
             .ok_or_else(|| anyhow::anyhow!("Cold storage is not configured"))?;
 
+        let shard_layout = match self.layout_version {
+            0 => ShardLayout::v0_single_shard(),
+            1 => ShardLayout::get_simple_nightshade_layout(),
+            2 => ShardLayout::get_simple_nightshade_layout_v2(),
+            3 => ShardLayout::get_simple_nightshade_layout_v3(),
+            _ => todo!(),
+        };
+
+        let shard_uid = ShardUId::from_shard_id_and_layout(self.shard_id, &shard_layout);
+
         let hashes = self.state_root_selector.get_hashes(storage, &cold_store)?;
+        // TODO(posvyatokum): fix shard_uid
         for hash in hashes.iter() {
-            Self::check_trie(
+            check_trie(
                 &cold_store,
                 &hash,
                 &mut PruneState::new(),
                 &PruneCondition { max_depth: self.max_depth, max_count: self.max_count },
+                shard_uid,
             )?;
         }
 
         Ok(())
     }
+}
 
-    /// Check that trie subtree of `hash` is fully present in `store`.
-    fn check_trie(
-        store: &Store,
-        hash: &CryptoHash,
-        prune_state: &mut PruneState,
-        prune_condition: &PruneCondition,
-    ) -> anyhow::Result<()> {
-        tracing::debug!(target: "check_trie", "Checking {:?} at {:?}", hash, prune_state);
-        if prune_state.should_prune(prune_condition) {
-            tracing::debug!(target: "check_trie", "Reached prune condition: {:?}", prune_condition);
+/// Check that trie subtree of `hash` is fully present in `store`.
+fn check_trie(
+    store: &Store,
+    hash: &CryptoHash,
+    prune_state: &mut PruneState,
+    prune_condition: &PruneCondition,
+    shard_uid: ShardUId,
+) -> anyhow::Result<()> {
+    tracing::debug!(target: "check_trie", "Checking {:?} at {:?}", hash, prune_state);
+    if prune_state.should_prune(prune_condition) {
+        tracing::debug!(target: "check_trie", "Reached prune condition: {:?}", prune_condition);
+        return Ok(());
+    }
+
+    let bytes = read_state(store, hash.as_ref(), shard_uid)
+        .with_context(|| format!("Failed to read raw bytes for hash {:?}", hash))?
+        .with_context(|| format!("Failed to find raw bytes for hash {:?}", hash))?;
+    let node = near_store::RawTrieNodeWithSize::try_from_slice(&bytes)?;
+    match node.node {
+        near_store::RawTrieNode::Leaf(..) => {
+            tracing::debug!(target: "check_trie", "Reached leaf node");
             return Ok(());
         }
-
-        let bytes = Self::read_state(store, hash.as_ref())
-            .with_context(|| format!("Failed to read raw bytes for hash {:?}", hash))?
-            .with_context(|| format!("Failed to find raw bytes for hash {:?}", hash))?;
-        let node = near_store::RawTrieNodeWithSize::try_from_slice(&bytes)?;
-        match node.node {
-            near_store::RawTrieNode::Leaf(..) => {
-                tracing::debug!(target: "check_trie", "Reached leaf node");
-                return Ok(());
-            }
-            near_store::RawTrieNode::BranchNoValue(mut children)
-            | near_store::RawTrieNode::BranchWithValue(_, mut children) => {
-                children.0.shuffle(&mut rand::thread_rng());
-                for (_, child) in children.iter() {
-                    // Record in prune state that we are visiting a child node
-                    prune_state.down();
-                    // Visit a child node
-                    Self::check_trie(store, child, prune_state, prune_condition)?;
-                    // Record in prune state that we are returning from a child node
-                    prune_state.up();
-                }
-            }
-            near_store::RawTrieNode::Extension(_, child) => {
+        near_store::RawTrieNode::BranchNoValue(mut children)
+        | near_store::RawTrieNode::BranchWithValue(_, mut children) => {
+            children.0.shuffle(&mut rand::thread_rng());
+            for (_, child) in children.iter() {
                 // Record in prune state that we are visiting a child node
                 prune_state.down();
                 // Visit a child node
-                Self::check_trie(store, &child, prune_state, prune_condition)?;
+                check_trie(store, child, prune_state, prune_condition, shard_uid)?;
                 // Record in prune state that we are returning from a child node
                 prune_state.up();
             }
         }
-        Ok(())
+        near_store::RawTrieNode::Extension(_, child) => {
+            // Record in prune state that we are visiting a child node
+            prune_state.down();
+            // Visit a child node
+            check_trie(store, &child, prune_state, prune_condition, shard_uid)?;
+            // Record in prune state that we are returning from a child node
+            prune_state.up();
+        }
     }
+    Ok(())
+}
 
-    fn read_state<'a>(
-        store: &'a Store,
-        trie_key: &'a [u8],
-    ) -> std::io::Result<Option<near_store::db::DBSlice<'a>>> {
-        // As cold db strips shard_uid at the beginning of State key, we can add any 8 u8s as prefix.
-        let cold_state_key = [&[1; 8], trie_key.as_ref()].concat();
-        store.get(DBCol::State, &cold_state_key)
-    }
+fn read_state<'a>(
+    store: &'a Store,
+    trie_key: &'a [u8],
+    shard_uid: ShardUId,
+) -> std::io::Result<Option<near_store::db::DBSlice<'a>>> {
+    // As cold db strips shard_uid at the beginning of State key, we can add any 8 u8s as prefix.
+    let cold_state_key = [&shard_uid.to_bytes(), trie_key.as_ref()].concat();
+    store.get(DBCol::State, &cold_state_key)
 }
 
 #[derive(clap::Args)]
@@ -671,5 +697,97 @@ impl ResetColdCmd {
         store_update.delete(DBCol::BlockMisc, COLD_HEAD_KEY);
         store_update.commit()?;
         Ok(())
+    }
+}
+
+#[derive(clap::Args)]
+struct CheckStateHistoryCmd {
+    /// Maximum depth (measured in number of nodes, not trie key length) for checking trie.
+    #[clap(long)]
+    max_depth: Option<u64>,
+    /// Maximum number of nodes checked for each state_root.
+    #[clap(long)]
+    max_count: Option<u64>,
+    /// Start height
+    #[clap(long)]
+    start_height: BlockHeight,
+    /// End height
+    #[clap(long)]
+    end_height: BlockHeight,
+    /// Path to write report file
+    #[clap(long)]
+    report_path: PathBuf,
+}
+
+impl CheckStateHistoryCmd {
+    pub fn run(self, storage: &NodeStorage) -> anyhow::Result<()> {
+        let split_store = storage.get_split_store().ok_or(anyhow!("Split Store is not configured"))?;
+        let mut report = File::create(self.report_path.clone())?;
+        for height in self.start_height..self.end_height {
+            match self.get_height_report(&split_store, height) {
+                Ok(Some(s)) => report.write_all(s.as_ref())?,
+                Err(e) => report.write_all(format!("{height:?}: {e:?}\n").as_ref())?,
+                Ok(None) => {}
+            };
+        }
+        Ok(())
+    }
+
+    fn get_height_report(
+        &self,
+        split_store: &Store,
+        height: BlockHeight,
+    ) -> anyhow::Result<Option<String>> {
+        let height_key = height.to_le_bytes();
+        let block_hash_vec = split_store.get(DBCol::BlockHeight, &height_key)?;
+        if block_hash_vec.is_none() {
+            return Ok(None);
+        }
+        let block_hash_vec = block_hash_vec.unwrap();
+        let block_hash_key = block_hash_vec.as_slice();
+        let block =
+            split_store.get_ser::<Block>(DBCol::Block, &block_hash_key)?.ok_or_else(|| {
+                anyhow::anyhow!("Block header not found for {height} with {block_hash_vec:?}")
+            })?;
+
+        let shard_layout = match block.header().chunk_mask().len() {
+            1 => ShardLayout::v0_single_shard(),
+            4 => ShardLayout::get_simple_nightshade_layout(),
+            5 => ShardLayout::get_simple_nightshade_layout_v2(),
+            6 => ShardLayout::get_simple_nightshade_layout_v3(),
+            _ => todo!(),
+        };
+
+        let mut chunk_results = vec![];
+
+        for chunk in block.chunks().iter() {
+            let hash = split_store
+                .get_ser::<near_primitives::sharding::ShardChunk>(
+                    DBCol::Chunks,
+                    chunk.chunk_hash().as_bytes(),
+                )?
+                .ok_or_else(|| anyhow::anyhow!("Failed to find Chunk: {:?}", chunk.chunk_hash()))?
+                .take_header()
+                .prev_state_root();
+
+            let shard_id = chunk.shard_id();
+
+            let shard_uid = ShardUId::from_shard_id_and_layout(shard_id, &shard_layout);
+
+            let result = check_trie(
+                split_store,
+                &hash,
+                &mut PruneState::new(),
+                &PruneCondition { max_depth: self.max_depth, max_count: self.max_count },
+                shard_uid,
+            );
+
+            chunk_results.push(match result {
+                Ok(()) => format!("{shard_id:?}: OK"),
+                Err(e) => format!("{shard_id:?}: {e:?}"),
+            });
+        }
+
+        Ok(Some(format!("{height:?}: {chunk_results:?}\n")))
     }
 }
